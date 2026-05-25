@@ -13,13 +13,14 @@ enum class Difficulty { EASY, MEDIUM, STRONG, PERFECT };
 enum class Outcome { WIN, DRAW, LOSS, UNKNOWN };
 
 struct SearchResult {
-    int     best_col       = -1;
-    int     score          = 0;     // negamax score (current player's view)
-    int     depth_reached  = 0;
-    long    nodes_evaluated = 0;
-    bool    is_exact       = false; // provably optimal
+    int     best_col        = -1;
+    int     score           = 0;     // negamax score (caller's perspective: positive = caller wins)
+    int     depth_reached   = 0;
+    long    nodes_evaluated  = 0;
+    bool    is_exact        = false; // provably optimal
+    int     player_to_move  = 0;    // which player called solve() (0 or 1)
 
-    // From the human player's perspective (human = player 0)
+    // From the specified player's perspective
     Outcome outcome(int human_player) const;
     int     moves_to_end()    const;  // valid only when is_exact
     int     confidence_pct(int moves_played) const;

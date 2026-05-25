@@ -18,13 +18,11 @@ Solver::Solver(Difficulty diff, size_t tt_mb)
 // ---------------------------------------------------------------------------
 
 Outcome SearchResult::outcome(int human_player) const {
-    // score is from the perspective of the player who just called solve(),
-    // which is the current player at the time of the call.
-    // We normalise: positive = human wins.
-    if (score == 0)  return Outcome::DRAW;
-    if (score >  0)  return Outcome::WIN;
+    // score is from player_to_move's perspective; flip if the human was NOT to move
+    int s = (player_to_move == human_player) ? score : -score;
+    if (s == 0) return Outcome::DRAW;
+    if (s >  0) return Outcome::WIN;
     return Outcome::LOSS;
-    (void)human_player;
 }
 
 int SearchResult::moves_to_end() const {
@@ -73,9 +71,15 @@ int Solver::negamax(Board& board, int alpha, int beta, int depth) {
     if (board.is_full())
         return 0;
 
-    // Depth limit reached — use heuristic in limited modes
-    if (depth == 0)
-        return eval_.score(board);
+    // Depth limit reached — use heuristic in limited modes.
+    // Clamp to non-terminal score range so heuristic values can never be
+    // mistaken for exact game-tree scores (which live at ±(MAX_SCORE - N/2)).
+    if (depth == 0) {
+        int s = eval_.score(board);
+        if (s >  MAX_SCORE - 1) s =  MAX_SCORE - 1;
+        if (s < -(MAX_SCORE - 1)) s = -(MAX_SCORE - 1);
+        return s;
+    }
 
     // Upper bound on score given remaining moves
     int upper = (CELLS - board.moves_played()) / 2;
@@ -205,10 +209,7 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
         d_best_col   = moves[0];
         if (s0 > alpha) alpha = s0;
 
-        // Win-in-1 score from the current position: can't improve on this
-        const int max_win_score = MAX_SCORE - board.moves_played() / 2;
-
-        if (alpha < beta && s0 < max_win_score) {
+        if (alpha < beta) {
         // Search remaining moves in parallel (Young Brothers Wait).
         // Protect (score, col) updates with a mutex so the two writes are atomic.
         std::mutex          best_mtx;
@@ -253,14 +254,13 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
         if (on_depth)
             on_depth(depth, max_depth, nodes_.load(std::memory_order_relaxed));
 
-        // No point searching deeper if we already proved the fastest possible win
-        if (best_score >= max_win_score) break;
     }
 
     // Invalidate any pending timer so it doesn't affect future solve() calls
     solve_gen_.fetch_add(1, std::memory_order_relaxed);
     abort_.store(false, std::memory_order_relaxed);
 
+    result.player_to_move = board.current_player();
     result.best_col       = best_col;
     result.score          = best_score;
     result.nodes_evaluated = nodes_.load(std::memory_order_relaxed);

@@ -100,13 +100,13 @@ std::string Board::to_string() const {
     for (int r = ROWS - 1; r >= 0; --r) {
         for (int c = 0; c < COLS; ++c) {
             uint64_t bit = 1ULL << (col_base(c) + r);
-            if      (pieces_[0] & bit) oss << "| X ";
-            else if (pieces_[1] & bit) oss << "| O ";
-            else                       oss << "| . ";
+            if      (pieces_[0] & bit) oss << "|X";
+            else if (pieces_[1] & bit) oss << "|O";
+            else                       oss << "| ";
         }
         oss << "|\n";
     }
-    oss << " ────────────────────────────\n";
-    oss << "   1   2   3   4   5   6   7\n";
+    oss << "───────────────\n";
+    oss << " 1 2 3 4 5 6 7\n";
     return oss.str();
 }

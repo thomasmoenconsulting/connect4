@@ -1,0 +1,5 @@
+build/
+connect4
+test_board
+test_solver
+*.o

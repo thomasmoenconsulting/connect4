@@ -140,7 +140,7 @@ int Solver::negamax(Board& board, int alpha, int beta, int depth) {
 // Public solve() — root search with OpenMP parallelism
 // ---------------------------------------------------------------------------
 
-SearchResult Solver::solve(Board& board) {
+SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
     nodes_.store(0, std::memory_order_relaxed);
 
     SearchResult result;
@@ -165,7 +165,6 @@ SearchResult Solver::solve(Board& board) {
     // making the final full-depth search much faster.
     int start_depth = (diff_ == Difficulty::STRONG || diff_ == Difficulty::PERFECT) ? 1 : max_depth;
 
-    auto t_start = std::chrono::steady_clock::now();
     constexpr int STRONG_BUDGET_MS = 5000;
 
     abort_.store(false, std::memory_order_relaxed);
@@ -192,9 +191,18 @@ SearchResult Solver::solve(Board& board) {
         board.make_move(moves[0]);
         int s0 = -negamax(board, -beta, -alpha, depth - 1);
         board.undo_move(moves[0]);
-        if (s0 > best_score) { best_score = s0; best_col = moves[0]; }
-        if (s0 > alpha) alpha = s0;
+        // Only count s0 if the search wasn't aborted
+        if (!abort_.load(std::memory_order_relaxed)) {
+            if (s0 > best_score) { best_score = s0; best_col = moves[0]; }
+            if (s0 > alpha) alpha = s0;
+        }
 
+        // Win-in-1 score from the current position: can't improve on this
+        const int max_win_score = MAX_SCORE - board.moves_played() / 2;
+
+        if (abort_.load(std::memory_order_relaxed) || alpha >= beta || s0 >= max_win_score) {
+            // Either aborted, beta-cutoff, or found the fastest possible win — skip OMP
+        } else {
         // Search remaining moves in parallel (Young Brothers Wait)
         std::atomic<int>  shared_alpha{alpha};
         std::atomic<int>  shared_best_score{best_score};
@@ -207,12 +215,6 @@ SearchResult Solver::solve(Board& board) {
 
             int local_alpha = shared_alpha.load(std::memory_order_relaxed);
             if (local_alpha >= beta) { cutoff.store(true); continue; }
-
-            // Skip remaining moves if we already have a forced win.
-            // shared_best_score is initialised with s0 (the serial move's score),
-            // so this fires immediately when the first move is a winner.
-            if (shared_best_score.load(std::memory_order_relaxed) > 0)
-                { cutoff.store(true, std::memory_order_relaxed); continue; }
 
             Board local = board;  // thread-local copy (two uint64_t + small state)
             local.make_move(moves[i]);
@@ -236,11 +238,20 @@ SearchResult Solver::solve(Board& board) {
                 cutoff.store(true, std::memory_order_relaxed);
         }
 
+        if (!abort_.load(std::memory_order_relaxed)) {
+            int pb = shared_best_score.load();
+            if (pb > best_score) {
+                best_score = pb;
+                best_col   = shared_best_col.load();
+            }
+        }
+        } // end else (OMP section)
+
         // Discard this depth's results if we were aborted mid-search
         if (!abort_.load(std::memory_order_relaxed)) {
-            best_score = shared_best_score.load();
-            best_col   = shared_best_col.load();
             result.depth_reached = depth;
+            if (on_depth)
+                on_depth(depth, max_depth, nodes_.load(std::memory_order_relaxed));
         } else {
             break;
         }

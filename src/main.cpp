@@ -130,9 +130,28 @@ int main() {
                 // AI move
                 std::cout << "  AI is thinking...\n";
                 auto t0 = std::chrono::steady_clock::now();
-                last_result = solver.solve(board);
+
+                Solver::ProgressCb cb;
+                if (diff == Difficulty::PERFECT) {
+                    int remaining = CELLS - board.moves_played();
+                    cb = [remaining](int d, int /*md*/, long nodes) {
+                        constexpr int BAR = 32;
+                        int filled = BAR * d / remaining;
+                        std::cout << "\r  [";
+                        for (int i = 0; i < BAR; ++i)
+                            std::cout << (i < filled ? '#' : '.');
+                        std::cout << "] " << d << "/" << remaining
+                                  << "  " << nodes / 1000 << "k nodes  ";
+                        std::cout.flush();
+                    };
+                }
+
+                last_result = solver.solve(board, cb);
                 auto t1 = std::chrono::steady_clock::now();
                 double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+                if (diff == Difficulty::PERFECT)
+                    std::cout << "\n";  // finish the progress bar line
 
                 col = last_result.best_col;
                 std::cout << "  AI played column " << col + 1

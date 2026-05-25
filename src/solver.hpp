@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+#include <functional>
 
 enum class Difficulty { EASY, MEDIUM, STRONG, PERFECT };
 
@@ -29,7 +30,9 @@ public:
     explicit Solver(Difficulty diff = Difficulty::PERFECT,
                     size_t tt_mb   = 64);
 
-    SearchResult solve(Board& board);
+    // on_depth(depth_completed, max_depth, nodes_so_far) — called after each depth
+    using ProgressCb = std::function<void(int, int, long)>;
+    SearchResult solve(Board& board, ProgressCb on_depth = nullptr);
 
     void set_difficulty(Difficulty d) { diff_ = d; }
     void clear_tt()                   { tt_.clear(); }

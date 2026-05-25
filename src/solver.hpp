@@ -34,14 +34,17 @@ public:
     using ProgressCb = std::function<void(int, int, long)>;
     SearchResult solve(Board& board, ProgressCb on_depth = nullptr);
 
-    void set_difficulty(Difficulty d) { diff_ = d; }
-    void clear_tt()                   { tt_.clear(); }
+    void set_difficulty(Difficulty d)   { diff_ = d; }
+    void set_time_budget_ms(int ms)     { time_budget_ms_ = ms; }
+    int  time_budget_ms()         const { return time_budget_ms_; }
+    void clear_tt()                     { tt_.clear(); }
 
     // Score range: wins scored as MAX_SCORE - half_moves_to_win
     static constexpr int MAX_SCORE = 22;  // (CELLS + 1) / 2
 
 private:
     Difficulty         diff_;
+    int                time_budget_ms_{5000};
     TranspositionTable tt_;
     HeuristicEval      eval_;
     std::atomic<long>  nodes_{0};

@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <climits>
 #include <chrono>
+#include <mutex>
 #include <omp.h>
 
 // Score convention (negamax, from current player's view):
@@ -165,68 +166,72 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
     // making the final full-depth search much faster.
     int start_depth = (diff_ == Difficulty::STRONG || diff_ == Difficulty::PERFECT) ? 1 : max_depth;
 
-    constexpr int STRONG_BUDGET_MS = 5000;
-
     abort_.store(false, std::memory_order_relaxed);
 
     // STRONG mode: timer thread fires after the budget and sets the abort flag.
     // A generation counter ensures a timer from a previous call doesn't interfere.
     uint64_t my_gen = solve_gen_.fetch_add(1, std::memory_order_relaxed) + 1;
     if (diff_ == Difficulty::STRONG) {
-        std::thread([this, my_gen, STRONG_BUDGET_MS]() {
-            std::this_thread::sleep_for(std::chrono::milliseconds(STRONG_BUDGET_MS));
+        int budget = time_budget_ms_;
+        std::thread([this, my_gen, budget]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(budget));
             if (solve_gen_.load(std::memory_order_relaxed) == my_gen)
                 abort_.store(true, std::memory_order_relaxed);
         }).detach();
     }
 
-    int  best_col   = moves[0];
-    int  best_score = -MAX_SCORE - 1;
+    // best_col/best_score track the result of the last *completed* depth.
+    // Each completed depth REPLACES (never max-merges) the previous depth's result.
+    int best_col   = moves[0];
+    int best_score = -MAX_SCORE - 1;
 
     for (int depth = start_depth; depth <= max_depth; ++depth) {
         int alpha = -MAX_SCORE - 1;
         int beta  =  MAX_SCORE + 1;
 
-        // Search first move serially to establish alpha
+        // Per-depth best: reset each iteration so depth-D heuristic can't
+        // poison depth D+1's result (the root cause of the always-center bug).
+        int d_best_col   = moves[0];
+        int d_best_score = -MAX_SCORE - 1;
+
+        // Search first move serially to establish alpha (Young Brothers Wait)
         board.make_move(moves[0]);
         int s0 = -negamax(board, -beta, -alpha, depth - 1);
         board.undo_move(moves[0]);
-        // Only count s0 if the search wasn't aborted
-        if (!abort_.load(std::memory_order_relaxed)) {
-            if (s0 > best_score) { best_score = s0; best_col = moves[0]; }
-            if (s0 > alpha) alpha = s0;
-        }
+
+        if (abort_.load(std::memory_order_relaxed)) break;
+
+        d_best_score = s0;
+        d_best_col   = moves[0];
+        if (s0 > alpha) alpha = s0;
 
         // Win-in-1 score from the current position: can't improve on this
         const int max_win_score = MAX_SCORE - board.moves_played() / 2;
 
-        if (abort_.load(std::memory_order_relaxed) || alpha >= beta || s0 >= max_win_score) {
-            // Either aborted, beta-cutoff, or found the fastest possible win — skip OMP
-        } else {
-        // Search remaining moves in parallel (Young Brothers Wait)
-        std::atomic<int>  shared_alpha{alpha};
-        std::atomic<int>  shared_best_score{best_score};
-        std::atomic<int>  shared_best_col{best_col};
-        std::atomic<bool> cutoff{false};
+        if (alpha < beta && s0 < max_win_score) {
+        // Search remaining moves in parallel (Young Brothers Wait).
+        // Protect (score, col) updates with a mutex so the two writes are atomic.
+        std::mutex          best_mtx;
+        std::atomic<int>    shared_alpha{alpha};
+        std::atomic<bool>   cutoff{false};
 
         #pragma omp parallel for schedule(dynamic) num_threads(omp_get_max_threads())
         for (int i = 1; i < n_moves; ++i) {
             if (cutoff.load(std::memory_order_relaxed)) continue;
 
             int local_alpha = shared_alpha.load(std::memory_order_relaxed);
-            if (local_alpha >= beta) { cutoff.store(true); continue; }
+            if (local_alpha >= beta) { cutoff.store(true, std::memory_order_relaxed); continue; }
 
-            Board local = board;  // thread-local copy (two uint64_t + small state)
+            Board local = board;
             local.make_move(moves[i]);
             int s = -negamax(local, -beta, -local_alpha, depth - 1);
 
-            // Update shared best atomically
-            int cur_best = shared_best_score.load(std::memory_order_relaxed);
-            while (s > cur_best &&
-                   !shared_best_score.compare_exchange_weak(
-                       cur_best, s, std::memory_order_relaxed));
-            if (s > cur_best) {
-                shared_best_col.store(moves[i], std::memory_order_relaxed);
+            {
+                std::lock_guard<std::mutex> lk(best_mtx);
+                if (s > d_best_score) {
+                    d_best_score = s;
+                    d_best_col   = moves[i];
+                }
             }
 
             int cur_alpha = shared_alpha.load(std::memory_order_relaxed);
@@ -234,27 +239,22 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
                    !shared_alpha.compare_exchange_weak(
                        cur_alpha, s, std::memory_order_relaxed));
 
-            if (shared_alpha.load() >= beta)
+            if (shared_alpha.load(std::memory_order_relaxed) >= beta)
                 cutoff.store(true, std::memory_order_relaxed);
         }
+        } // end OMP section
 
-        if (!abort_.load(std::memory_order_relaxed)) {
-            int pb = shared_best_score.load();
-            if (pb > best_score) {
-                best_score = pb;
-                best_col   = shared_best_col.load();
-            }
-        }
-        } // end else (OMP section)
+        if (abort_.load(std::memory_order_relaxed)) break;
 
-        // Discard this depth's results if we were aborted mid-search
-        if (!abort_.load(std::memory_order_relaxed)) {
-            result.depth_reached = depth;
-            if (on_depth)
-                on_depth(depth, max_depth, nodes_.load(std::memory_order_relaxed));
-        } else {
-            break;
-        }
+        // Commit this depth's result
+        best_score = d_best_score;
+        best_col   = d_best_col;
+        result.depth_reached = depth;
+        if (on_depth)
+            on_depth(depth, max_depth, nodes_.load(std::memory_order_relaxed));
+
+        // No point searching deeper if we already proved the fastest possible win
+        if (best_score >= max_win_score) break;
     }
 
     // Invalidate any pending timer so it doesn't affect future solve() calls

@@ -5,23 +5,23 @@
 #include <chrono>
 #include <cstdlib>
 
-static const char* difficulty_name(Difficulty d) {
+static std::string difficulty_name(Difficulty d, int budget_ms) {
     switch (d) {
         case Difficulty::EASY:    return "EASY";
         case Difficulty::MEDIUM:  return "MEDIUM";
-        case Difficulty::STRONG:  return "STRONG";
+        case Difficulty::STRONG:  return "TIMED (" + std::to_string(budget_ms / 1000) + "s)";
         case Difficulty::PERFECT: return "PERFECT";
     }
     return "?";
 }
 
-static void print_header(Difficulty diff, bool two_player) {
+static void print_header(Difficulty diff, int budget_ms, bool two_player) {
     std::cout << "\n";
     if (two_player)
         std::cout << "  Connect 4 — Player X vs Player O\n";
     else
         std::cout << "  Connect 4 — You (X) vs AI (O) — Mode: "
-                  << difficulty_name(diff) << "\n";
+                  << difficulty_name(diff, budget_ms) << "\n";
     std::cout << "\n";
 }
 
@@ -69,19 +69,28 @@ static int get_human_move(const Board& board) {
     }
 }
 
-static Difficulty choose_difficulty() {
+// Returns {difficulty, time_budget_ms (only meaningful for STRONG)}
+static std::pair<Difficulty, int> choose_difficulty() {
     std::cout << "\n  Difficulty:\n"
-              << "    1) Easy\n"
-              << "    2) Medium\n"
-              << "    3) Strong\n"
-              << "    4) Perfect\n"
+              << "    1) Easy    (depth 3)\n"
+              << "    2) Medium  (depth 7)\n"
+              << "    3) Timed   (iterative deepening with a time limit)\n"
+              << "    4) Perfect (full search — slow early game)\n"
               << "  Choice [4]: ";
     std::string line;
     std::getline(std::cin, line);
-    if (line == "1") return Difficulty::EASY;
-    if (line == "2") return Difficulty::MEDIUM;
-    if (line == "3") return Difficulty::STRONG;
-    return Difficulty::PERFECT;
+    if (line == "1") return {Difficulty::EASY,   0};
+    if (line == "2") return {Difficulty::MEDIUM,  0};
+    if (line == "3") {
+        std::cout << "  Seconds per move [5]: ";
+        std::string s;
+        std::getline(std::cin, s);
+        int secs = 5;
+        try { secs = std::stoi(s); } catch (...) {}
+        if (secs < 1) secs = 1;
+        return {Difficulty::STRONG, secs * 1000};
+    }
+    return {Difficulty::PERFECT, 0};
 }
 
 static bool choose_two_player() {
@@ -100,14 +109,19 @@ int main() {
     std::cout << "============================\n";
 
     bool two_player = choose_two_player();
-    Difficulty diff = Difficulty::PERFECT;
-    if (!two_player) diff = choose_difficulty();
+    Difficulty diff       = Difficulty::PERFECT;
+    int        budget_ms  = 0;
+    if (!two_player) {
+        auto [d, b] = choose_difficulty();
+        diff = d; budget_ms = b;
+    }
 
     Solver solver(diff);
+    if (diff == Difficulty::STRONG) solver.set_time_budget_ms(budget_ms);
 
     while (true) {
         Board board;
-        print_header(diff, two_player);
+        print_header(diff, budget_ms, two_player);
 
         SearchResult last_result;
         bool game_over = false;
@@ -132,16 +146,27 @@ int main() {
                 auto t0 = std::chrono::steady_clock::now();
 
                 Solver::ProgressCb cb;
-                if (diff == Difficulty::PERFECT) {
-                    int remaining = CELLS - board.moves_played();
-                    cb = [remaining](int d, int /*md*/, long nodes) {
+                if (diff == Difficulty::STRONG) {
+                    // Time-based bar: elapsed / budget (linear, meaningful)
+                    cb = [t0, budget_ms](int d, int /*md*/, long nodes) {
+                        auto now = std::chrono::steady_clock::now();
+                        double elapsed = std::chrono::duration<double, std::milli>(now - t0).count();
                         constexpr int BAR = 32;
-                        int filled = BAR * d / remaining;
+                        int filled = static_cast<int>(BAR * elapsed / budget_ms);
+                        if (filled > BAR) filled = BAR;
                         std::cout << "\r  [";
                         for (int i = 0; i < BAR; ++i)
                             std::cout << (i < filled ? '#' : '.');
-                        std::cout << "] " << d << "/" << remaining
+                        std::cout << "] " << static_cast<int>(elapsed / 1000.0) << "s"
+                                  << "  depth " << d
                                   << "  " << nodes / 1000 << "k nodes  ";
+                        std::cout.flush();
+                    };
+                } else if (diff == Difficulty::PERFECT) {
+                    // Depth+nodes readout (no bar — depths are exponential, a bar would mislead)
+                    cb = [](int d, int md, long nodes) {
+                        std::cout << "\r  depth " << d << "/" << md
+                                  << "  " << nodes / 1000 << "k nodes          ";
                         std::cout.flush();
                     };
                 }
@@ -150,8 +175,8 @@ int main() {
                 auto t1 = std::chrono::steady_clock::now();
                 double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
-                if (diff == Difficulty::PERFECT)
-                    std::cout << "\n";  // finish the progress bar line
+                if (diff == Difficulty::STRONG || diff == Difficulty::PERFECT)
+                    std::cout << "\n";  // finish the progress line
 
                 col = last_result.best_col;
                 std::cout << "  AI played column " << col + 1

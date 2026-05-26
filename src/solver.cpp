@@ -92,12 +92,16 @@ int Solver::negamax(Board& board, int alpha, int beta, int depth) {
         return 0;
 
     // Depth limit reached — use heuristic in limited modes.
-    // Clamp to non-terminal score range so heuristic values can never be
-    // mistaken for exact game-tree scores (which live at ±(MAX_SCORE - N/2)).
+    // Clamp to a position-specific ceiling that is provably below any exact
+    // win/loss score for this node.  An exact win at this node in d more plies
+    // scores MAX_SCORE - (moves+d-1)/2 ≥ (CELLS-moves)/2.  Clamping heuristics
+    // to (CELLS-moves)/2 - 1 creates a strict gap, letting the ID loop detect
+    // proven forced results and stop early.
     if (depth == 0) {
-        int s = eval_.score(board);
-        if (s >  MAX_SCORE - 1) s =  MAX_SCORE - 1;
-        if (s < -(MAX_SCORE - 1)) s = -(MAX_SCORE - 1);
+        int s     = eval_.score(board);
+        int bound = std::max(0, (CELLS - board.moves_played()) / 2 - 1);
+        if (s >  bound) s =  bound;
+        if (s < -bound) s = -bound;
         return s;
     }
 
@@ -254,10 +258,11 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
 
     // best_col/best_score track the result of the last *completed* depth.
     // Each completed depth REPLACES (never max-merges) the previous depth's result.
-    int  best_col   = moves[0];
-    int  best_score = -MAX_SCORE - 1;
-    int  prev_score = 0;
-    bool aborted    = false;
+    int  best_col      = moves[0];
+    int  best_score    = -MAX_SCORE - 1;
+    int  prev_score    = 0;
+    bool aborted       = false;
+    int  stable_depths = 0;   // consecutive depths with the same best_col
 
     for (int depth = start_depth; depth <= max_depth && !aborted; ++depth) {
         // Aspiration windows: start with a narrow band around the previous
@@ -357,12 +362,31 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
         if (aborted) break;
 
         // Commit this depth's result
+        if (d_best_col == best_col) ++stable_depths; else stable_depths = 1;
         best_score = d_best_score;
         best_col   = d_best_col;
         prev_score = d_best_score;
         result.depth_reached = depth;
         if (on_depth)
             on_depth(depth, max_depth, nodes_.load(std::memory_order_relaxed));
+
+        // In timed mode, stop early if the best move has been stable for several
+        // depths in a row — the answer has converged and deeper search won't
+        // change it. Only applies once we've searched at least a handful of plies.
+        if (diff_ == Difficulty::STRONG && depth >= 5 && stable_depths >= 4)
+            break;
+
+        // If best_score exceeds the heuristic ceiling for depth-D leaves,
+        // it came from an exact terminal node — a forced win/loss is proven.
+        // No deeper search can change the result; stop iterating.
+        // Heuristics at depth-D leaves are clamped to (CELLS-M-D)/2-1 (strict
+        // lower bound); exact scores are ≥ (CELLS-M-D)/2.
+        int remaining = CELLS - board.moves_played();
+        int exact_threshold = (remaining - depth) / 2;
+        if (std::abs(best_score) >= exact_threshold) {
+            result.is_exact = true;
+            break;
+        }
     }
 
     // Bump generation so any still-sleeping timer thread won't set abort_
@@ -374,10 +398,10 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
     result.best_col        = best_col;
     result.score           = best_score;
     result.nodes_evaluated = nodes_.load(std::memory_order_relaxed);
-    // Exact iff we actually searched to the leaves. PERFECT mode usually does,
-    // but if the safety timer cut us off, it didn't — so the depth check is
-    // the right gate, not the difficulty.
-    result.is_exact        = result.depth_reached >= CELLS - board.moves_played();
+    // is_exact is set either by the forced-result early-exit above or by
+    // reaching full depth; don't overwrite it if already set.
+    if (!result.is_exact)
+        result.is_exact = result.depth_reached >= CELLS - board.moves_played();
 
     return result;
 }

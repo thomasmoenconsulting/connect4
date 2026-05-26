@@ -80,7 +80,7 @@ int Solver::max_depth_for(const Board& board) const {
 int Solver::negamax(Board& board, int alpha, int beta, int depth) {
     // Periodically check for abort signal (set by timer thread for STRONG mode)
     long n = nodes_.fetch_add(1, std::memory_order_relaxed);
-    if ((n & 0x3FF) == 0 && abort_.load(std::memory_order_relaxed))
+    if ((n & 0xFF) == 0 && abort_.load(std::memory_order_relaxed))
         return 0;
 
     // Terminal: previous player won
@@ -311,6 +311,7 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
             #pragma omp parallel for schedule(dynamic)
             for (int i = 1; i < n_moves; ++i) {
                 if (cutoff.load(std::memory_order_relaxed)) continue;
+                if (abort_.load(std::memory_order_relaxed)) continue;
 
                 int local_alpha = shared_alpha.load(std::memory_order_relaxed);
                 if (local_alpha >= beta) { cutoff.store(true, std::memory_order_relaxed); continue; }

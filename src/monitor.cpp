@@ -25,20 +25,24 @@ static void print_board(const Board& b) {
 
 static void print_analysis(const SearchResult& r, int moves_played) {
     Outcome out = r.outcome(0);
-    const char* label =
-        out == Outcome::WIN  ? "WIN"  :
-        out == Outcome::DRAW ? "DRAW" : "LOSS";
-    std::cout << "  Position   : " << label;
-    if (r.is_exact && r.moves_to_end() > 0) {
-        // moves_to_end() returns total game length when win occurs;
-        // subtract moves already played to get moves remaining from this position.
-        int from_now = r.moves_to_end() - moves_played;
-        if (from_now <= 0) from_now = 1;
-        std::cout << "  (" << (out == Outcome::WIN ? "you" : "AI")
-                  << " wins in ~" << from_now << " moves)";
-    } else if (!r.is_exact) {
-        std::cout << "  (depth " << r.depth_reached << "/" << (CELLS - moves_played)
-                  << "  " << r.confidence_pct(moves_played) << "% confidence)";
+    if (r.is_exact) {
+        const char* label = out == Outcome::WIN  ? "WIN"
+                         : out == Outcome::DRAW ? "DRAW"
+                                                : "LOSS";
+        std::cout << "  Position   : " << label;
+        if (out != Outcome::DRAW) {
+            int from_now = r.moves_to_end() - moves_played;
+            if (from_now <= 0) from_now = 1;
+            std::cout << "  (" << (out == Outcome::WIN ? "you" : "AI")
+                      << " wins in ~" << from_now << " moves)";
+        }
+    } else {
+        const char* hint = out == Outcome::WIN  ? "looks good for you"
+                        : out == Outcome::DRAW ? "looks balanced"
+                                               : "looks worrying";
+        std::cout << "  Estimate   : " << hint
+                  << "  (depth " << r.depth_reached << "/" << (CELLS - moves_played)
+                  << ", " << r.confidence_pct(moves_played) << "% depth)";
     }
     std::cout << "\n";
 }

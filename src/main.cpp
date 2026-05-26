@@ -32,24 +32,26 @@ static void print_result(const SearchResult& r, int moves_played, bool /*human_t
     int pct     = r.confidence_pct(moves_played);
     int ply_left = CELLS - moves_played;
 
-    // Outcome label (always from human's perspective)
-    const char* label = "UNKNOWN";
-    if (out == Outcome::WIN)       label = "WIN";
-    else if (out == Outcome::DRAW) label = "DRAW";
-    else if (out == Outcome::LOSS) label = "LOSS";
-
-    std::cout << "  Your position : " << label;
-    if (r.is_exact && r.moves_to_end() > 0)
-        std::cout << "  (" << (out == Outcome::WIN ? "you win" : "AI wins")
-                  << " in " << r.moves_to_end() << " moves with perfect play)";
-    else if (!r.is_exact)
-        std::cout << "  (estimated, searched " << r.depth_reached
-                  << " of " << ply_left << " remaining plies)";
-    std::cout << "\n";
-
-    std::cout << "  Confidence    : " << pct << "%";
-    if (pct == 100) std::cout << "  (solved)";
-    std::cout << "\n";
+    if (r.is_exact) {
+        // Definitive game-tree result
+        const char* label = out == Outcome::WIN  ? "WIN"
+                         : out == Outcome::DRAW ? "DRAW"
+                                                : "LOSS";
+        std::cout << "  Your position : " << label;
+        if (out != Outcome::DRAW)
+            std::cout << "  (" << (out == Outcome::WIN ? "you win" : "AI wins")
+                      << " in " << (r.moves_to_end() - moves_played)
+                      << " more moves with perfect play)";
+        std::cout << "\n  Confidence    : 100%  (solved)\n";
+    } else {
+        // Heuristic-only — don't claim a definite outcome
+        const char* hint = out == Outcome::WIN  ? "looks good for you"
+                        : out == Outcome::DRAW ? "looks balanced"
+                                               : "looks worrying";
+        std::cout << "  Estimate      : " << hint
+                  << "  (searched " << r.depth_reached
+                  << " of " << ply_left << " remaining plies, " << pct << "% depth)\n";
+    }
 }
 
 static int get_human_move(const Board& board) {

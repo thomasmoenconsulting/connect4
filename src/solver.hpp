@@ -14,11 +14,11 @@ enum class Outcome { WIN, DRAW, LOSS, UNKNOWN };
 
 struct SearchResult {
     int     best_col        = -1;
-    int     score           = 0;     // negamax score (caller's perspective: positive = caller wins)
+    int     score           = 0;     // negamax score from player_to_move's view
     int     depth_reached   = 0;
-    long    nodes_evaluated  = 0;
-    bool    is_exact        = false; // provably optimal
-    int     player_to_move  = 0;    // which player called solve() (0 or 1)
+    long    nodes_evaluated = 0;
+    bool    is_exact        = false; // provably optimal (full search completed)
+    int     player_to_move  = 0;     // 0 or 1 — used to flip score in outcome()
 
     // From the specified player's perspective
     Outcome outcome(int human_player) const;
@@ -38,6 +38,8 @@ public:
     void set_difficulty(Difficulty d)   { diff_ = d; }
     void set_time_budget_ms(int ms)     { time_budget_ms_ = ms; }
     int  time_budget_ms()         const { return time_budget_ms_; }
+    void set_perfect_max_ms(int ms)     { perfect_max_ms_ = ms; }
+    int  perfect_max_ms()         const { return perfect_max_ms_; }
     void clear_tt()                     { tt_.clear(); }
 
     // Score range: wins scored as MAX_SCORE - half_moves_to_win
@@ -46,13 +48,13 @@ public:
 private:
     Difficulty         diff_;
     int                time_budget_ms_{5000};
+    int                perfect_max_ms_{300000};  // 5-min safety cap for PERFECT
     TranspositionTable tt_;
     HeuristicEval      eval_;
-    std::atomic<long>  nodes_{0};
-    std::atomic<bool>     abort_{false};  // set to interrupt a running negamax
-    std::atomic<uint64_t> solve_gen_{0}; // incremented each solve() call
+    std::atomic<long>     nodes_{0};
+    std::atomic<bool>     abort_{false};      // set to interrupt a running negamax
+    std::atomic<uint64_t> solve_gen_{0};      // incremented each solve() call
 
     int negamax(Board& board, int alpha, int beta, int depth);
-
     int max_depth_for(const Board& board) const;
 };

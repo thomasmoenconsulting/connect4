@@ -3,6 +3,7 @@
 #include <climits>
 #include <chrono>
 #include <mutex>
+#include <random>
 #include <omp.h>
 
 // Score convention (negamax, from current player's view):
@@ -168,6 +169,15 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
         if (board.is_valid(c))
             moves[n_moves++] = c;
 
+    // EASY: shuffle root moves so equally-scored options vary across games.
+    // The strict `s > best_score` tiebreak always picks the first-encountered
+    // move, which combined with fixed centre-out ordering makes EASY play the
+    // same opening every time.
+    if (diff_ == Difficulty::EASY) {
+        static thread_local std::mt19937 rng{std::random_device{}()};
+        std::shuffle(moves.begin(), moves.begin() + n_moves, rng);
+    }
+
     if (n_moves == 0) return result;
     if (n_moves == 1) {
         result.best_col      = moves[0];
@@ -180,13 +190,18 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
     // making the final full-depth search much faster.
     int start_depth = (diff_ == Difficulty::STRONG || diff_ == Difficulty::PERFECT) ? 1 : max_depth;
 
-    // STRONG mode: timer thread fires after the budget and sets the abort flag.
+    // Timer thread fires after the budget and sets the abort flag.
+    // STRONG uses time_budget_ms_; PERFECT uses perfect_max_ms_ as a safety
+    // ceiling so an early-game search can't run for hours. EASY/MEDIUM have
+    // fixed shallow depths and don't need a timer.
     // A generation counter ensures a timer from a previous call doesn't interfere.
     uint64_t my_gen = solve_gen_.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (diff_ == Difficulty::STRONG) {
-        int budget = time_budget_ms_;
-        std::thread([this, my_gen, budget]() {
-            std::this_thread::sleep_for(std::chrono::milliseconds(budget));
+    int budget_ms = 0;
+    if (diff_ == Difficulty::STRONG)  budget_ms = time_budget_ms_;
+    if (diff_ == Difficulty::PERFECT) budget_ms = perfect_max_ms_;
+    if (budget_ms > 0) {
+        std::thread([this, my_gen, budget_ms]() {
+            std::this_thread::sleep_for(std::chrono::milliseconds(budget_ms));
             if (solve_gen_.load(std::memory_order_relaxed) == my_gen)
                 abort_.store(true, std::memory_order_relaxed);
         }).detach();
@@ -224,7 +239,7 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
         std::atomic<int>    shared_alpha{alpha};
         std::atomic<bool>   cutoff{false};
 
-        #pragma omp parallel for schedule(dynamic) num_threads(omp_get_max_threads())
+        #pragma omp parallel for schedule(dynamic)
         for (int i = 1; i < n_moves; ++i) {
             if (cutoff.load(std::memory_order_relaxed)) continue;
 
@@ -269,12 +284,14 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
     // covers the race where a timer set abort_ between this bump and entry.
     solve_gen_.fetch_add(1, std::memory_order_relaxed);
 
-    result.player_to_move = board.current_player();
-    result.best_col       = best_col;
-    result.score          = best_score;
+    result.player_to_move  = board.current_player();
+    result.best_col        = best_col;
+    result.score           = best_score;
     result.nodes_evaluated = nodes_.load(std::memory_order_relaxed);
-    result.is_exact       = (diff_ == Difficulty::PERFECT) ||
-                             (result.depth_reached >= CELLS - board.moves_played());
+    // Exact iff we actually searched to the leaves. PERFECT mode usually does,
+    // but if the safety timer cut us off, it didn't — so the depth check is
+    // the right gate, not the difficulty.
+    result.is_exact        = result.depth_reached >= CELLS - board.moves_played();
 
     return result;
 }

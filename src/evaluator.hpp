@@ -19,9 +19,8 @@ public:
     int score(const Board& board) const override {
         int me  = board.current_player();
         int opp = 1 - me;
-        uint64_t mine = board.pieces(me);
+        uint64_t mine   = board.pieces(me);
         uint64_t theirs = board.pieces(opp);
-        uint64_t empty = BOARD_MASK & ~(mine | theirs);
 
         int s = 0;
 
@@ -31,9 +30,8 @@ public:
             int my_count  = __builtin_popcountll(mine   & window);
             int opp_count = __builtin_popcountll(theirs & window);
             if (my_count > 0 && opp_count > 0) return;  // blocked window
-            if (my_count > 0)  s += (1 << (my_count  - 1));  // 1, 2, 4 for 1,2,3 in row
+            if (my_count  > 0) s += (1 << (my_count  - 1));  // 1, 2, 4 for 1,2,3 in row
             if (opp_count > 0) s -= (1 << (opp_count - 1));
-            (void)empty;
         };
 
         // Horizontal

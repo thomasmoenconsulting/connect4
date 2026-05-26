@@ -21,7 +21,7 @@ test: test_board test_solver
 	./test_solver
 
 test_board: tests/test_board.cpp $(SRC)
-	$(CXX) $(CXXFLAGS) tests/test_board.cpp $(SRC) -o $@
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) tests/test_board.cpp $(SRC) -o $@
 
 test_solver: tests/test_solver.cpp $(SRC)
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) tests/test_solver.cpp $(SRC) -o $@

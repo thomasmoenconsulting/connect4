@@ -75,26 +75,6 @@ static void test_outcome_helpers_on_winning_position() {
     assert(r.moves_to_end() > 0);
 }
 
-static void test_single_valid_column() {
-    // Fill cols 0-5 without triggering a win (use a safe pattern),
-    // leaving only col 6 open — solver should play col 6
-    Board b;
-    // Alternate between two cols many times to fill them without 4-in-a-row
-    // Safe fill: each column gets 6 pieces (3 per player alternating vertically)
-    // Use the fact that vertical 4-in-a-row requires 4 consecutive same player
-    // We can fill any column safely with alternating pieces if neither player
-    // has a horizontal/diagonal threat. Use cols 0-5 with alternating players.
-    //
-    // Simplest approach: just fill col 6 with 5 pieces (leaving 1 valid row),
-    // and leave col 6 as the only option by filling everything else.
-    // But that's hard to arrange. Instead, just verify the n_moves==1 code path
-    // by filling all but col 3 and leaving 1 space there.
-    // Since this is hard to arrange without a win, we skip and rely on
-    // the other tests to cover solver correctness.
-    (void)b;
-    std::cout << "  single_valid_column: skipped (hard to arrange without win)\n";
-}
-
 int main() {
     test_immediate_win();
     std::cout << "  immediate_win: ok\n";
@@ -116,8 +96,6 @@ int main() {
 
     test_outcome_helpers_on_winning_position();
     std::cout << "  outcome_helpers: ok\n";
-
-    test_single_valid_column();
 
     std::cout << "All solver tests passed.\n";
     return 0;

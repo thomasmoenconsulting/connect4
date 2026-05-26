@@ -95,11 +95,13 @@ int Solver::negamax(Board& board, int alpha, int beta, int depth) {
     uint64_t canon    = std::min(key, key_mir);
     flipped = (canon == key_mir && key != key_mir);
 
-    int tt_score = 0, tt_col = -1;
-    if (tt_.probe(canon, depth, alpha, beta, tt_score, tt_col)) {
-        if (flipped && tt_col >= 0) tt_col = Board::mirror_col(tt_col);
-        return tt_score;
-    }
+    int  tt_score = 0, tt_col = -1;
+    bool tt_hit   = tt_.probe(canon, depth, alpha, beta, tt_score, tt_col);
+    // probe() may set tt_col on key match even when it returns false
+    // (depth too low / bound unusable). Mirror unconditionally so the
+    // move-ordering hint below is in our orientation.
+    if (flipped && tt_col >= 0) tt_col = Board::mirror_col(tt_col);
+    if (tt_hit) return tt_score;
 
     // Build move list, seeded with TT best move first
     std::array<int, COLS> moves;
@@ -134,6 +136,10 @@ int Solver::negamax(Board& board, int alpha, int beta, int depth) {
         }
     }
 
+    // Don't pollute the TT with results from aborted subtrees — child
+    // negamax calls returned 0 on abort, so best_score is meaningless.
+    if (abort_.load(std::memory_order_relaxed)) return 0;
+
     // Store in TT (translate col back to canonical orientation)
     int store_col = flipped ? Board::mirror_col(best_col) : best_col;
     tt_.store(canon, depth, best_score, bound, store_col);
@@ -147,6 +153,10 @@ int Solver::negamax(Board& board, int alpha, int beta, int depth) {
 
 SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
     nodes_.store(0, std::memory_order_relaxed);
+    // Clear abort flag up-front. A timer from a previous solve() could race
+    // past its generation check and set abort_ between calls; clearing here
+    // (rather than at end-of-solve) guarantees we start with a clean slate.
+    abort_.store(false, std::memory_order_relaxed);
 
     SearchResult result;
     int max_depth = max_depth_for(board);
@@ -169,8 +179,6 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
     // Iterative deepening for PERFECT/STRONG: builds TT for move ordering,
     // making the final full-depth search much faster.
     int start_depth = (diff_ == Difficulty::STRONG || diff_ == Difficulty::PERFECT) ? 1 : max_depth;
-
-    abort_.store(false, std::memory_order_relaxed);
 
     // STRONG mode: timer thread fires after the budget and sets the abort flag.
     // A generation counter ensures a timer from a previous call doesn't interfere.
@@ -256,9 +264,10 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
 
     }
 
-    // Invalidate any pending timer so it doesn't affect future solve() calls
+    // Bump generation so any still-sleeping timer thread won't set abort_
+    // for this solve. The next solve() resets abort_ at entry, which also
+    // covers the race where a timer set abort_ between this bump and entry.
     solve_gen_.fetch_add(1, std::memory_order_relaxed);
-    abort_.store(false, std::memory_order_relaxed);
 
     result.player_to_move = board.current_player();
     result.best_col       = best_col;

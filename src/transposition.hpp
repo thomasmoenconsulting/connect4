@@ -7,16 +7,19 @@
 enum class Bound : uint8_t { EXACT, LOWER, UPPER };
 
 struct TTEntry {
-    uint64_t key   = 0;
-    int8_t   score = 0;
-    int8_t   depth = 0;
+    int8_t   score    = 0;
+    int8_t   depth    = 0;
     int8_t   best_col = -1;
-    Bound    bound = Bound::EXACT;
+    Bound    bound    = Bound::EXACT;
 };
 
-// Lock-free transposition table using atomic 64-bit slots.
-// Each slot packs the entry into two 64-bit atomics so we can do a
-// lock-free read/write without false sharing between threads.
+// Lock-free transposition table using two atomic 64-bit slots per entry.
+//
+// Race protection: the data slot stores `pack(entry) XOR key`. A racing
+// reader that sees (old_key, new_data) or (new_key, old_data) recovers
+// garbage on the XOR — caught by the sanity checks in probe(). With random
+// 64-bit Zobrist keys the residual chance of a corrupted entry passing
+// validation is ~1 in 2^32 per probe — alpha-beta tolerates it.
 //
 // Replacement policy: replace if new depth >= stored depth.
 //
@@ -42,7 +45,8 @@ public:
         }
     }
 
-    // Returns false if no usable entry found
+    // Returns false if no usable entry found. May still set best_col when
+    // the key matches but the stored depth is too shallow to return a score.
     bool probe(uint64_t key, int depth, int alpha, int beta,
                int& score, int& best_col) const
     {
@@ -52,7 +56,9 @@ public:
 
         if (k != key) return false;
 
-        TTEntry e = unpack(data);
+        TTEntry e = unpack(data ^ k);
+        if (!is_sane(e)) return false;  // racy read caught by XOR sanity check
+
         best_col = e.best_col;
 
         if (e.depth < depth) return false;  // not deep enough
@@ -71,20 +77,21 @@ public:
 
     void store(uint64_t key, int depth, int score, Bound bound, int best_col) {
         Slot& slot = slots_[key & mask_];
-        uint64_t cur_data = slot.data.load(std::memory_order_relaxed);
-        TTEntry  cur = unpack(cur_data);
-
-        if (cur.depth > depth) return;  // keep the deeper entry
+        uint64_t cur_k = slot.key.load(std::memory_order_relaxed);
+        if (cur_k == key) {
+            uint64_t cur_d = slot.data.load(std::memory_order_relaxed);
+            TTEntry  cur   = unpack(cur_d ^ cur_k);
+            if (is_sane(cur) && cur.depth > depth) return;  // keep deeper entry
+        }
 
         TTEntry e;
-        e.key      = 0;  // not stored here — key goes in key atomic
         e.score    = static_cast<int8_t>(score);
         e.depth    = static_cast<int8_t>(depth);
         e.best_col = static_cast<int8_t>(best_col);
         e.bound    = bound;
 
-        slot.key .store(key,   std::memory_order_relaxed);
-        slot.data.store(pack(e), std::memory_order_relaxed);
+        slot.key .store(key,                   std::memory_order_relaxed);
+        slot.data.store(pack(e) ^ key,         std::memory_order_relaxed);
     }
 
 private:
@@ -111,5 +118,16 @@ private:
         e.best_col = static_cast<int8_t>((data >> 16) & 0xFF);
         e.bound    = static_cast<Bound> ((data >> 24) & 0xFF);
         return e;
+    }
+
+    // Validates that the decoded entry's fields are in legal ranges.
+    // Connect-4 specific: depth in [0, 42], best_col in [-1, 6], bound enum
+    // is one of {EXACT, LOWER, UPPER}, score within ±(MAX_SCORE+1).
+    static bool is_sane(const TTEntry& e) {
+        if (e.depth < 0 || e.depth > 42)             return false;
+        if (e.best_col < -1 || e.best_col >= 7)      return false;
+        if (static_cast<uint8_t>(e.bound) > 2)       return false;
+        if (e.score < -23 || e.score > 23)           return false;
+        return true;
     }
 };

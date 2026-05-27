@@ -258,11 +258,10 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
 
     // best_col/best_score track the result of the last *completed* depth.
     // Each completed depth REPLACES (never max-merges) the previous depth's result.
-    int  best_col      = moves[0];
-    int  best_score    = -MAX_SCORE - 1;
-    int  prev_score    = 0;
-    bool aborted       = false;
-    int  stable_depths = 0;   // consecutive depths with the same best_col
+    int  best_col   = moves[0];
+    int  best_score = -MAX_SCORE - 1;
+    int  prev_score = 0;
+    bool aborted    = false;
 
     for (int depth = start_depth; depth <= max_depth && !aborted; ++depth) {
         // Aspiration windows: start with a narrow band around the previous
@@ -362,19 +361,12 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
         if (aborted) break;
 
         // Commit this depth's result
-        if (d_best_col == best_col) ++stable_depths; else stable_depths = 1;
         best_score = d_best_score;
         best_col   = d_best_col;
         prev_score = d_best_score;
         result.depth_reached = depth;
         if (on_depth)
             on_depth(depth, max_depth, nodes_.load(std::memory_order_relaxed));
-
-        // In timed mode, stop early if the best move has been stable for several
-        // depths in a row — the answer has converged and deeper search won't
-        // change it. Only applies once we've searched at least a handful of plies.
-        if (diff_ == Difficulty::STRONG && depth >= 5 && stable_depths >= 4)
-            break;
 
         // If best_score exceeds the heuristic ceiling for depth-D leaves,
         // it came from an exact terminal node — a forced win/loss is proven.

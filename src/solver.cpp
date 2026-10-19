@@ -5,6 +5,7 @@
 #include <mutex>
 #include <random>
 #include <omp.h>
+#include <array>
 
 // Score convention (negamax, from current player's view):
 //   win  in N half-moves from root:  MAX_SCORE - N/2
@@ -396,4 +397,23 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
         result.is_exact = result.depth_reached >= CELLS - board.moves_played();
 
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// score_moves — per-column evaluation using the warm TT
+// ---------------------------------------------------------------------------
+
+std::array<int, COLS> Solver::score_moves(Board& board, int depth) {
+    std::array<int, COLS> scores;
+    scores.fill(INT_MIN);
+    if (depth < 1) return scores;
+    // Clear any stale abort flag before re-entering negamax.
+    abort_.store(false, std::memory_order_relaxed);
+    for (int c = 0; c < COLS; ++c) {
+        if (!board.is_valid(c)) continue;
+        board.make_move(c);
+        scores[c] = -negamax(board, -MAX_SCORE - 1, MAX_SCORE + 1, depth - 1);
+        board.undo_move(c);
+    }
+    return scores;
 }

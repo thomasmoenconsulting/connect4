@@ -42,6 +42,11 @@ public:
     int  perfect_max_ms()         const { return perfect_max_ms_; }
     void clear_tt()                     { tt_.clear(); }
 
+    // Score every valid column at the given depth using the warm TT.
+    // Returns INT_MIN for full/invalid columns. Scores are from current player's view.
+    // Cheap when called right after solve() because the TT is already populated.
+    std::array<int, COLS> score_moves(Board& board, int depth);
+
     // Score range: wins scored as MAX_SCORE - half_moves_to_win
     static constexpr int MAX_SCORE = 22;  // (CELLS + 1) / 2
 

@@ -1,9 +1,14 @@
 #include "board.hpp"
 #include "solver.hpp"
 #include <iostream>
+#include <sstream>
 #include <string>
+#include <vector>
+#include <array>
+#include <climits>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
 
 static std::string difficulty_name(Difficulty d, int budget_ms) {
     switch (d) {
@@ -95,6 +100,90 @@ static std::pair<Difficulty, int> choose_difficulty() {
     return {Difficulty::PERFECT, 0};
 }
 
+static bool choose_info_mode() {
+    std::cout << "\n  Show move scores? (y/n) [n]: ";
+    std::string line;
+    std::getline(std::cin, line);
+    return (line == "y" || line == "Y");
+}
+
+// ---------------------------------------------------------------------------
+// Side-by-side board + score table rendering
+// ---------------------------------------------------------------------------
+
+static std::string fmt_score(int s) {
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "%+4d", s);
+    return buf;
+}
+
+static const char* score_label(int s, bool exact) {
+    if (exact) {
+        if (s > 0) return "WIN ";
+        if (s < 0) return "LOSS";
+        return "draw";
+    }
+    if (s >  2) return "win?";
+    if (s < -2) return "loss";
+    return "~eq ";
+}
+
+// Count visual columns (terminal width) of a UTF-8 string.
+static int visual_len(const std::string& s) {
+    int n = 0;
+    for (size_t i = 0; i < s.size(); ) {
+        unsigned char c = s[i];
+        if      (c < 0x80) { ++i;      ++n; }
+        else if (c < 0xE0) { i += 2;   ++n; }
+        else if (c < 0xF0) { i += 3;   ++n; }
+        else               { i += 4;   ++n; }
+    }
+    return n;
+}
+
+// Print the board with a per-column score table to the right.
+// col_scores[c] is from current player's view (INT_MIN = full/invalid).
+// player label is shown in the header, e.g. "X" or "O".
+static void print_board_scores(
+    const Board& board,
+    const std::array<int, COLS>& col_scores,
+    int best_col,
+    bool is_exact,
+    const char* player_label = "")
+{
+    std::string bs = board.to_string();
+    std::vector<std::string> lines;
+    std::istringstream ss(bs);
+    std::string ln;
+    while (std::getline(ss, ln)) lines.push_back(ln);
+    // Remove trailing empty line (to_string ends with \n)
+    if (!lines.empty() && lines.back().empty()) lines.pop_back();
+    // lines: 6 board rows (top→bottom) + "───" + " 1 2…" = 8 entries
+
+    for (int i = 0; i < (int)lines.size(); ++i) {
+        std::cout << "  " << lines[i];
+        // Pad so the table starts at a fixed column (board lines are 15 visual chars wide)
+        int pad = 15 - visual_len(lines[i]) + 4;
+        for (int p = 0; p < pad; ++p) std::cout << ' ';
+
+        if (i == 0) {
+            std::cout << "Col  Score";
+            if (player_label[0]) std::cout << " (" << player_label << ")";
+        } else if (i >= 1 && i < 1 + COLS) {
+            int col = i - 1;
+            int s   = col_scores[col];
+            if (s == INT_MIN) {
+                std::cout << " " << (col + 1) << "   full";
+            } else {
+                std::cout << " " << (col + 1) << " " << fmt_score(s)
+                          << "  " << score_label(s, is_exact);
+                if (col == best_col) std::cout << " \xE2\x86\x90";  // UTF-8 ←
+            }
+        }
+        std::cout << "\n";
+    }
+}
+
 static bool choose_two_player() {
     std::cout << "\n  Mode:\n"
               << "    1) Human vs AI\n"
@@ -118,6 +207,8 @@ int main() {
         diff = d; budget_ms = b;
     }
 
+    bool info_mode = !two_player && choose_info_mode();
+
     Solver solver(diff);
     if (diff == Difficulty::STRONG) solver.set_time_budget_ms(budget_ms);
 
@@ -129,27 +220,36 @@ int main() {
         bool game_over = false;
 
         while (!game_over) {
-            std::cout << board.to_string() << "\n";
-
-            int player = board.current_player();  // 0 = X, 1 = O
+            int player    = board.current_player();  // 0 = X, 1 = O
             bool is_human = two_player || (player == 0);
 
             int col = -1;
             if (is_human) {
-                // Show the AI's analysis before the human moves (in 1P mode)
+                // Print board — with score table on human's turn when info mode is on
+                if (info_mode && last_result.depth_reached > 0) {
+                    auto scores = solver.score_moves(board, last_result.depth_reached);
+                    int hi = -1, hi_s = INT_MIN;
+                    for (int c = 0; c < COLS; ++c)
+                        if (scores[c] != INT_MIN && scores[c] > hi_s) { hi_s = scores[c]; hi = c; }
+                    print_board_scores(board, scores, hi, last_result.is_exact, "X");
+                } else {
+                    std::cout << board.to_string();
+                }
+                std::cout << "\n";
+
                 if (!two_player && last_result.best_col >= 0)
                     print_result(last_result, board.moves_played(), true);
                 std::cout << "  Player " << (player == 0 ? "X" : "O") << "'s turn\n";
                 col = get_human_move(board);
                 if (col < 0) { std::cout << "  Goodbye.\n"; return 0; }
             } else {
-                // AI move
+                // AI move — print board first (plain), then think, then show scores
+                std::cout << board.to_string() << "\n";
                 std::cout << "  AI is thinking...\n";
                 auto t0 = std::chrono::steady_clock::now();
 
                 Solver::ProgressCb cb;
                 if (diff == Difficulty::STRONG) {
-                    // Time-based bar: elapsed / budget (linear, meaningful)
                     cb = [t0, budget_ms](int d, int /*md*/, long nodes) {
                         auto now = std::chrono::steady_clock::now();
                         double elapsed = std::chrono::duration<double, std::milli>(now - t0).count();
@@ -165,7 +265,6 @@ int main() {
                         std::cout.flush();
                     };
                 } else if (diff == Difficulty::PERFECT) {
-                    // Depth+nodes readout (no bar — depths are exponential, a bar would mislead)
                     cb = [](int d, int md, long nodes) {
                         std::cout << "\r  depth " << d << "/" << md
                                   << "  " << nodes / 1000 << "k nodes          ";
@@ -187,6 +286,13 @@ int main() {
                           << " | " << ms / 1000.0 << "s]\n\n";
                 print_result(last_result, board.moves_played(), false);
                 std::cout << "\n";
+
+                // Show AI's per-column scores after solve (TT is warm — fast)
+                if (info_mode) {
+                    auto scores = solver.score_moves(board, last_result.depth_reached);
+                    print_board_scores(board, scores, col, last_result.is_exact, "O");
+                    std::cout << "\n";
+                }
             }
 
             board.make_move(col);

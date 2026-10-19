@@ -30,6 +30,14 @@ Requires g++ with C++20 and OpenMP support (`libgomp`). cmake is not required �
 
 **Evaluator** (`evaluator.hpp`) — counts open 4-windows weighted by pieces already in them. Designed as a virtual interface so a CUDA neural evaluator can replace it later without touching the solver.
 
+## Opening book
+
+`src/opening_book.{hpp,cpp}` loads `data/connect4.book` — a 10-ply exact-score table imported from Pascal Pons' published `7x6.book` (github.com/PascalPons/connect4). `Solver::solve()` and `Solver::score_moves()` probe it before searching; a hit returns `is_exact=true` with zero nodes evaluated.
+
+Format: 16-byte header + sorted `(uint64 canonical_key, int8 score)` entries, 9 bytes each. ~1.2M positions, ~10 MB. Keys are Zobrist (`min(key, key_mirrored)` for symmetry).
+
+The book file is a build artifact (gitignored). Regenerate with `make book` after cloning Pons' solver into `/tmp/pons-c4/` and downloading his `7x6.book` release asset (see Makefile `PONS_DIR`/`PONS_BOOK`). The importer in `tools/import_book.cpp` enumerates canonical positions up to `MAX_PLIES` and pipes them through Pons' `c4solver` for exact scoring. Raising `MAX_PLIES` is a one-line change but import time scales super-linearly (14 plies ≈ 30+ hours because most of Pons' 2²³-entry book misses require a full re-solve).
+
 ## Known limitations
 
-PERFECT mode is only practical for mid/late game (30+ moves played). Early-game positions require tens of minutes even with alpha-beta and TT. The solver lacks PVS/aspiration windows and an opening book.
+Without the opening book, PERFECT mode is only practical for mid/late game (30+ moves played). With the book, the first 10 plies are instant; from ply 11 onward the solver runs normally.

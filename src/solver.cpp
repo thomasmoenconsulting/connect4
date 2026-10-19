@@ -34,6 +34,19 @@ static void record_killer(int depth, int col) {
 Solver::Solver(Difficulty diff, size_t tt_mb)
     : diff_(diff), tt_(tt_mb) {}
 
+bool Solver::load_book(const std::string& path) {
+    return book_.load(path);
+}
+
+// Probe the opening book for a position. Returns MISS if the book isn't
+// loaded or the position is deeper than the book covers.
+static int probe_book(const OpeningBook& book, const Board& board) {
+    if (!book.loaded()) return OpeningBook::MISS;
+    if (board.moves_played() > book.max_plies()) return OpeningBook::MISS;
+    uint64_t k = std::min(board.key(), board.key_mirrored());
+    return book.probe(k);
+}
+
 // ---------------------------------------------------------------------------
 // SearchResult helpers
 // ---------------------------------------------------------------------------
@@ -234,6 +247,42 @@ SearchResult Solver::solve(Board& board, ProgressCb on_depth) {
         return result;
     }
 
+    // Opening-book early return. We require the children to also be queryable
+    // (ply < max_plies) so we can pick best_col without searching. For the
+    // boundary case (ply == max_plies) we fall through to normal search.
+    if (book_.loaded() && board.moves_played() < book_.max_plies()) {
+        int my_score = probe_book(book_, board);
+        if (my_score != OpeningBook::MISS) {
+            int best_c = -1;
+            int best_s = -MAX_SCORE - 1;
+            for (int c : Board::MOVE_ORDER) {
+                if (!board.is_valid(c)) continue;
+                board.make_move(c);
+                if (board.last_player_won()) {
+                    board.undo_move(c);
+                    // Immediate win is always the best possible — short-circuit.
+                    best_c = c;
+                    break;
+                }
+                int child = probe_book(book_, board);
+                board.undo_move(c);
+                if (child == OpeningBook::MISS) continue;
+                int s = -child;  // child score is from the opponent's view
+                if (s > best_s) { best_s = s; best_c = c; }
+            }
+            if (best_c >= 0) {
+                result.best_col        = best_c;
+                result.score           = my_score;
+                result.depth_reached   = CELLS - board.moves_played();
+                result.nodes_evaluated = 0;
+                result.is_exact        = true;
+                result.player_to_move  = board.current_player();
+                if (on_depth) on_depth(result.depth_reached, result.depth_reached, 0);
+                return result;
+            }
+        }
+    }
+
     // Iterative deepening: warms the TT for move ordering at each subsequent
     // depth. Skip for EASY so its root shuffle isn't overruled by TT hits
     // from the depth-1 pass (and depth 3 is cheap enough that ID overhead
@@ -412,7 +461,18 @@ std::array<int, COLS> Solver::score_moves(Board& board, int depth) {
     for (int c = 0; c < COLS; ++c) {
         if (!board.is_valid(c)) continue;
         board.make_move(c);
-        scores[c] = -negamax(board, -MAX_SCORE - 1, MAX_SCORE + 1, depth - 1);
+        // Immediate win and book lookup both yield exact scores more cheaply
+        // than a shallow negamax probe, and look right in the UI.
+        if (board.last_player_won()) {
+            scores[c] = MAX_SCORE;  // winning move from the pre-move mover's view
+        } else {
+            int b = probe_book(book_, board);
+            if (b != OpeningBook::MISS) {
+                scores[c] = -b;  // flip from opponent's view back to current mover's view
+            } else {
+                scores[c] = -negamax(board, -MAX_SCORE - 1, MAX_SCORE + 1, depth - 1);
+            }
+        }
         board.undo_move(c);
     }
     return scores;

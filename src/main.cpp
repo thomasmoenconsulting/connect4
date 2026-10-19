@@ -212,6 +212,13 @@ int main() {
     Solver solver(diff);
     if (diff == Difficulty::STRONG) solver.set_time_budget_ms(budget_ms);
 
+    if (solver.load_book("data/connect4.book")) {
+        std::cout << "  Opening book loaded (" << solver.book().max_plies()
+                  << " plies, " << solver.book().size() << " positions)\n";
+    } else {
+        std::cout << "  No opening book (run `make data/connect4.book`)\n";
+    }
+
     while (true) {
         Board board;
         print_header(diff, budget_ms, two_player);

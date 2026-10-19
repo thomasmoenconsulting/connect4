@@ -2,6 +2,7 @@
 #include "board.hpp"
 #include "transposition.hpp"
 #include "evaluator.hpp"
+#include "opening_book.hpp"
 #include <cstdint>
 #include <atomic>
 #include <chrono>
@@ -31,6 +32,10 @@ public:
     explicit Solver(Difficulty diff = Difficulty::PERFECT,
                     size_t tt_mb   = 64);
 
+    // Returns true if the book file loaded successfully. Silent no-op on miss.
+    bool load_book(const std::string& path);
+    const OpeningBook& book() const { return book_; }
+
     // on_depth(depth_completed, max_depth, nodes_so_far) — called after each depth
     using ProgressCb = std::function<void(int, int, long)>;
     SearchResult solve(Board& board, ProgressCb on_depth = nullptr);
@@ -56,6 +61,7 @@ private:
     int                perfect_max_ms_{300000};  // 5-min safety cap for PERFECT
     TranspositionTable tt_;
     HeuristicEval      eval_;
+    OpeningBook        book_;
     std::atomic<long>     nodes_{0};
     std::atomic<bool>     abort_{false};      // set to interrupt a running negamax
     std::atomic<uint64_t> solve_gen_{0};      // incremented each solve() call

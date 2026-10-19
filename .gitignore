@@ -3,4 +3,6 @@ connect4
 monitor
 test_board
 test_solver
+import_book
+data/
 *.o

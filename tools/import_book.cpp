@@ -122,12 +122,21 @@ int main(int argc, char** argv) {
                       << out[idx].moves << "' got '" << seq_part << "'\n";
             return 1;
         }
-        int score = std::atoi(score_part.c_str());
-        if (score < -22 || score > 22) {
-            std::cerr << "score out of range at " << idx << ": " << score << "\n";
+        int pons = std::atoi(score_part.c_str());
+        if (pons < -22 || pons > 22) {
+            std::cerr << "score out of range at " << idx << ": " << pons << "\n";
             return 1;
         }
-        book_entries.push_back({out[idx].key, (int8_t)score});
+        // Convert Pons' score (|P| = 42 - winning_half_move) to our solver's
+        // convention (|S| = 22 - (winning_half_move - 1)/2), which simplifies
+        // to |S| = |P|/2 + 2 for a decisive game. Draws stay 0.
+        int ours;
+        if (pons == 0) ours = 0;
+        else {
+            int abs_s = std::abs(pons) / 2 + 2;
+            ours = pons > 0 ? abs_s : -abs_s;
+        }
+        book_entries.push_back({out[idx].key, (int8_t)ours});
         ++idx;
     }
     if (idx != out.size()) {
